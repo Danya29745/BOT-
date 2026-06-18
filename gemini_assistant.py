@@ -1,27 +1,26 @@
 """
-gemini_assistant.py — замена neuralex на Google Gemini API (бесплатный tier).
+gemini_assistant.py — замена neuralex на Google Gemini API.
+Использует новую библиотеку google-genai (вместо устаревшей google.generativeai).
 Поддерживает: текст, PDF, DOCX, изображения, историю чата.
-Интерфейс идентичен neuralex: conversational(query, session_id) → (answer, messages)
 """
 
 import logging
 import threading
 import time
-import base64
 import os
 import tempfile
-import google.generativeai as genai
-from pathlib import Path
+from google import genai
+from google.genai import types
 
 logger = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# СИСТЕМНЫЙ ПРОМПТ — редактируй здесь
+# СИСТЕМНЫЙ ПРОМПТ
 # ─────────────────────────────────────────────────────────────────────────────
 SYSTEM_PROMPT = """
 Ты — бот @LegalHelpRU_bot, помощник по юридическим вопросам на основе российского законодательства.
 
-⚠️ ВАЖНЫЙ ДИСКЛЕЙМЕР — добавляй в начало каждого ответа на юридический вопрос:
+ВАЖНЫЙ ДИСКЛЕЙМЕР — добавляй в начало каждого ответа на юридический вопрос:
 «Я бот, не дипломированный юрист. Мои ответы носят исключительно информационный характер и не являются официальной юридической консультацией. Я не несу ответственности за последствия принятых на их основе решений. По серьёзным вопросам обращайтесь к квалифицированному юристу.»
 
 ТВОЯ ЛИЧНОСТЬ:
@@ -36,7 +35,7 @@ SYSTEM_PROMPT = """
 
 ⚠️ Дисклеймер (кратко)
 
-🎯 Краткий ответ: суть в 1–2 предложениях
+🎯 Краткий ответ: суть в 1-2 предложениях
 
 📋 Подробнее: развёрнутое объяснение простыми словами
 
@@ -47,7 +46,7 @@ SYSTEM_PROMPT = """
 💡 Важно знать: ключевые нюансы и риски
 
 ЗАКОНОДАТЕЛЬНАЯ БАЗА:
-Конституция РФ, ГК РФ, УК РФ, КоАП РФ, ТК РФ, СК РФ, НК РФ, ГПК РФ, УПК РФ, АПК РФ, ЖК РФ, ЗК РФ, ФЗ «О защите прав потребителей», ФЗ «О персональных данных» и другие федеральные законы.
+Конституция РФ, ГК РФ, УК РФ, КоАП РФ, ТК РФ, СК РФ, НК РФ, ГПК РФ, УПК РФ, АПК РФ, ЖК РФ, ЗК РФ, ФЗ О защите прав потребителей, ФЗ О персональных данных и другие федеральные законы.
 
 ПРАВИЛА:
 - Если вопрос не юридический — вежливо направь к юридическим вопросам
@@ -60,10 +59,10 @@ SYSTEM_PROMPT = """
 DOCUMENT_ANALYSIS_PROMPT = """
 Проанализируй приложенный документ на соответствие российскому законодательству.
 
-⚠️ Я бот, не юрист. Анализ носит информационный характер.
+Я бот, не юрист. Анализ носит информационный характер.
 
 Структура анализа:
-📋 Общая оценка: ✅ Соответствует / ⚠️ Частично / ❌ Не соответствует
+📋 Общая оценка: Соответствует / Частично / Не соответствует
 🔍 Чеклист обязательных элементов документа
 ⚖️ Соответствие законодательству РФ
 🚨 Выявленные проблемы и риски
@@ -77,8 +76,7 @@ DOCUMENT_ANALYSIS_PROMPT = """
 
 class GeminiAssistant:
     """
-    ИИ-помощник на базе Google Gemini.
-    Поддерживает текст, PDF, DOCX, изображения.
+    ИИ-помощник на базе Google Gemini (новая библиотека google-genai).
     Совместимый интерфейс с neuralex.
     """
 
@@ -87,22 +85,9 @@ class GeminiAssistant:
 
     def __init__(self, api_key: str, model: str = "gemini-2.0-flash",
                  redis_url: str = None, vector_store=None):
-        genai.configure(api_key=api_key)
+        self.client = genai.Client(api_key=api_key)
         self.model_name = model
-        self.vector_store = vector_store  # опционально, для RAG
-
-        # Конфигурация генерации
-        self.generation_config = genai.types.GenerationConfig(
-            max_output_tokens=2048,
-            temperature=0.7,
-        )
-
-        # Инициализация модели
-        self.model = genai.GenerativeModel(
-            model_name=self.model_name,
-            generation_config=self.generation_config,
-            system_instruction=SYSTEM_PROMPT,
-        )
+        self.vector_store = vector_store
 
         # Опциональный Redis
         self._redis = None
@@ -167,59 +152,74 @@ class GeminiAssistant:
 
     # ─── Основной метод ──────────────────────────────────────────────────────
 
-    def conversational(self, query: str, session_id: str, file_bytes: bytes = None,
-                       file_mime: str = None):
+    def conversational(self, query: str, session_id: str,
+                       file_bytes: bytes = None, file_mime: str = None):
         """
-        query       — текст пользователя
-        session_id  — ID пользователя/сессии
-        file_bytes  — байты файла (PDF, DOCX, изображение) — опционально
-        file_mime   — MIME-тип файла, напр. 'application/pdf'
+        query      — текст пользователя
+        session_id — ID пользователя/сессии
+        file_bytes — байты файла (PDF, DOCX, изображение) — опционально
+        file_mime  — MIME-тип файла
 
-        Возвращает (answer: str, history: list) — совместимо с neuralex
+        Возвращает (answer: str, history: list)
         """
         start = time.time()
-
         history = self.get_session_history(session_id)
 
-        # Формат истории для Gemini: [{"role": "user"/"model", "parts": [...]}]
+        # Собираем историю в формат Gemini
         gemini_history = []
         for msg in history:
             role = "model" if msg.get("role") == "assistant" else "user"
-            gemini_history.append({"role": role, "parts": [msg.get("content", "")]})
+            gemini_history.append(
+                types.Content(role=role, parts=[types.Part(text=msg.get("content", ""))])
+            )
 
-        # Запускаем чат с историей
-        chat = self.model.start_chat(history=gemini_history)
-
-        # Формируем сообщение
+        # Формируем текущее сообщение
         parts = []
 
-        # Добавляем RAG-контекст если нет файла
+        # RAG-контекст (только если нет файла)
         if not file_bytes:
             context = self._get_context(query)
             if context:
-                parts.append(f"КОНТЕКСТ ИЗ БАЗЫ ЗАКОНОВ:\n{context}\n\n")
+                parts.append(types.Part(text=f"КОНТЕКСТ ИЗ БАЗЫ ЗАКОНОВ:\n{context}\n\n"))
 
-        parts.append(query)
+        parts.append(types.Part(text=query or DOCUMENT_ANALYSIS_PROMPT))
 
         # Добавляем файл если есть
         if file_bytes and file_mime:
             try:
-                # Gemini принимает файлы через upload API
                 with tempfile.NamedTemporaryFile(delete=False, suffix=self._ext(file_mime)) as tmp:
                     tmp.write(file_bytes)
                     tmp_path = tmp.name
 
-                uploaded = genai.upload_file(tmp_path, mime_type=file_mime)
-                parts = [uploaded, query if query else DOCUMENT_ANALYSIS_PROMPT]
+                uploaded = self.client.files.upload(
+                    file=tmp_path,
+                    config=types.UploadFileConfig(mime_type=file_mime)
+                )
+                parts = [
+                    types.Part(file_data=types.FileData(file_uri=uploaded.uri, mime_type=file_mime)),
+                    types.Part(text=query if query else DOCUMENT_ANALYSIS_PROMPT)
+                ]
                 os.unlink(tmp_path)
                 logger.info(f"✅ Файл загружен в Gemini: {file_mime}")
             except Exception as e:
-                logger.warning(f"Ошибка загрузки файла в Gemini: {e}")
-                # Fallback: добавляем текст что файл не удалось обработать
-                parts.append("\n[Не удалось обработать прикреплённый файл]")
+                logger.warning(f"Ошибка загрузки файла: {e}")
+                parts.append(types.Part(text="\n[Не удалось обработать прикреплённый файл]"))
+
+        # Добавляем текущее сообщение в историю
+        gemini_history.append(
+            types.Content(role="user", parts=parts)
+        )
 
         try:
-            response = chat.send_message(parts)
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=gemini_history,
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_PROMPT,
+                    max_output_tokens=2048,
+                    temperature=0.7,
+                )
+            )
             answer = response.text
 
             # Обновляем историю
@@ -227,7 +227,7 @@ class GeminiAssistant:
                 self._store.setdefault(session_id, [])
                 self._store[session_id].append({"role": "user", "content": query or "Анализ документа"})
                 self._store[session_id].append({"role": "assistant", "content": answer})
-                # Хранить максимум 20 сообщений (10 пар)
+                # Максимум 20 сообщений (10 пар)
                 if len(self._store[session_id]) > 20:
                     self._store[session_id] = self._store[session_id][-20:]
 
@@ -244,16 +244,10 @@ class GeminiAssistant:
 
     def analyze_document(self, document_text: str, session_id: str,
                          file_bytes: bytes = None, file_mime: str = None) -> str:
-        """
-        Анализирует юридический документ.
-        Принимает либо текст (document_text), либо файл (file_bytes + file_mime).
-        """
         if file_bytes and file_mime:
             answer, _ = self.conversational(
-                DOCUMENT_ANALYSIS_PROMPT,
-                session_id,
-                file_bytes=file_bytes,
-                file_mime=file_mime
+                DOCUMENT_ANALYSIS_PROMPT, session_id,
+                file_bytes=file_bytes, file_mime=file_mime
             )
         else:
             prompt = DOCUMENT_ANALYSIS_PROMPT + f"\n\nТЕКСТ ДОКУМЕНТА:\n{document_text[:8000]}"
@@ -269,8 +263,6 @@ class GeminiAssistant:
             "image/jpeg": ".jpg",
             "image/png": ".png",
         }.get(mime, ".bin")
-
-    # ─── Совместимость с neuralex ─────────────────────────────────────────────
 
     def rate_last_answer(self, session_id: str, rating: int) -> bool:
         if self._redis:
