@@ -1,10 +1,13 @@
 # Telegram Bot
 python-telegram-bot==20.7
 
+# Google Gemini AI (замена OpenAI)
+google-generativeai>=0.7.0
+
 # Environment variables
 python-dotenv==1.0.0
 
-# LangChain ecosystem
+# LangChain ecosystem (для ChromaDB RAG — опционально)
 langchain==0.2.9
 langchain-core==0.2.24
 langchain-community==0.2.10
@@ -18,12 +21,8 @@ langsmith==0.1.93
 chromadb==0.4.24
 chroma-hnswlib==0.7.3
 
-# OpenAI SDK
+# OpenAI SDK (оставляем для совместимости с langchain-openai)
 openai>=1.32.0,<2.0.0
-
-# Utilities
-langdetect==1.0.9
-PyMuPDF==1.24.9
 
 # Redis for caching
 redis>=6.3.0
@@ -45,3 +44,4 @@ tenacity>=8.1,<9
 
 # Additional utilities
 schedule>=1.2.0
+langdetect==1.0.9
