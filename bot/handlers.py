@@ -85,8 +85,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message and update.message.text and update.message.text.startswith('/admin'):
         if admin_handlers.admin_panel.is_admin(user_id):
             await update.message.reply_text(
-                "🔧 **АДМИН-ПАНЕЛЬ**\n\nВыберите раздел:",
-                parse_mode='Markdown',
+                "🔧 АДМИН-ПАНЕЛЬ\n\nВыберите раздел:",
                 reply_markup=admin_handlers.admin_panel.get_admin_menu()
             )
             return
@@ -135,35 +134,31 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == 'ask':
         state_manager.set_user_state(user_id, 'asking_question')
         await query.edit_message_text(
-            "❓ *Задайте ваш вопрос*\n\n"
+            "❓ Задайте ваш вопрос\n\n"
             "Напишите юридический вопрос, и я постараюсь помочь.\n\n"
-            "_Пример: «Как правильно уволить сотрудника по статье?»_",
-            parse_mode='Markdown',
+            "Пример: «Как правильно уволить сотрудника по статье?»",
             reply_markup=back_to_main_button()
         )
 
     elif data == 'check_document':
         state_manager.set_user_state(user_id, 'waiting_document')
         await query.edit_message_text(
-            "📄 *Проверка документа*\n\n"
+            "📄 Проверка документа\n\n"
             "Отправьте файл документа (PDF, DOCX, TXT) или изображение, "
             "и я проверю его на соответствие российскому законодательству.\n\n"
             "⚠️ Максимальный размер файла: 20 МБ",
-            parse_mode='Markdown',
             reply_markup=back_to_main_button()
         )
 
     elif data == 'feedback':
         await query.edit_message_text(
-            "💬 *Обратная связь*\n\nВыберите тип обратной связи:",
-            parse_mode='Markdown',
+            "💬 Обратная связь\n\nВыберите тип обратной связи:",
             reply_markup=feedback_menu()
         )
 
     elif data == 'settings':
         await query.edit_message_text(
-            "⚙️ *Настройки*\n\nВыберите раздел:",
-            parse_mode='Markdown',
+            "⚙️ Настройки\n\nВыберите раздел:",
             reply_markup=settings_menu()
         )
 
@@ -287,7 +282,7 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         elif 'api_key' in err or 'invalid' in err:
             msg = "❌ Ошибка ключа Gemini API. Проверьте GEMINI_API_KEY в .env"
         else:
-            msg = f"❌ Произошла ошибка при обработке запроса.\n\nПопробуйте позже."
+            msg = "❌ Произошла ошибка при обработке запроса.\n\nПопробуйте позже."
         await update.message.reply_text(msg, reply_markup=main_menu())
 
 
