@@ -1,0 +1,47 @@
+# Telegram Bot
+python-telegram-bot==20.7
+
+# Environment variables
+python-dotenv==1.0.0
+
+# LangChain ecosystem
+langchain==0.2.9
+langchain-core==0.2.24
+langchain-community==0.2.10
+langchain-openai==0.1.15
+langchain-chroma==0.1.4
+langchain-text-splitters==0.2.2
+langchainhub==0.1.20
+langsmith==0.1.93
+
+# Chroma vector database
+chromadb==0.4.24
+chroma-hnswlib==0.7.3
+
+# OpenAI SDK
+openai>=1.32.0,<2.0.0
+
+# Utilities
+langdetect==1.0.9
+PyMuPDF==1.24.9
+
+# Redis for caching
+redis>=6.3.0
+
+# Document processing
+python-docx==1.1.0
+PyMuPDF==1.24.9
+
+# Logging and monitoring
+structlog>=23.1.0
+
+# Compatible dependency versions
+numpy>=1.24,<2.0
+packaging>=23.2,<25
+protobuf>=3.20,<6
+rich>=10.14,<14
+httpx<0.28
+tenacity>=8.1,<9
+
+# Additional utilities
+schedule>=1.2.0
