@@ -1,8 +1,8 @@
 # Telegram Bot
 python-telegram-bot==20.7
 
-# Google Gemini AI (замена OpenAI)
-google-generativeai>=0.7.0
+# Google Gemini AI (новая библиотека)
+google-genai>=1.0.0
 
 # Environment variables
 python-dotenv==1.0.0
