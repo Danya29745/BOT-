@@ -98,14 +98,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"👋 Привет, {user.first_name}!\n\n"
         "Я — бот @LegalHelpRU_bot, помощник по юридическим вопросам "
         "на основе российского законодательства.\n\n"
-        "⚠️ *Важно:* Я бот, не дипломированный юрист. Мои ответы носят "
+        "⚠️ Важно: Я бот, не дипломированный юрист. Мои ответы носят "
         "информационный характер и не являются официальной юридической консультацией.\n\n"
         "❓ Задайте вопрос текстом или выберите действие в меню:"
     )
 
     await update.message.reply_text(
         welcome_text,
-        parse_mode='Markdown',
         reply_markup=main_menu()
     )
     state_manager.clear_user_state(user_id)
