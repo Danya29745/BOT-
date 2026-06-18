@@ -269,5 +269,3 @@ class GeminiAssistant:
             except Exception:
                 pass
         return False
-ENDOFFILE
-echo "done"
