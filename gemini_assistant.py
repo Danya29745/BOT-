@@ -1,22 +1,16 @@
 """
-gemini_assistant.py — замена neuralex на Google Gemini API.
-Использует новую библиотеку google-genai (вместо устаревшей google.generativeai).
-Поддерживает: текст, PDF, DOCX, изображения, историю чата.
+gemini_assistant.py — ИИ-ассистент на базе OpenRouter API.
+Совместимый интерфейс с neuralex: conversational(query, session_id) → (answer, history)
 """
 
 import logging
 import threading
 import time
 import os
-import tempfile
-from google import genai
-from google.genai import types
+from openai import OpenAI
 
 logger = logging.getLogger(__name__)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# СИСТЕМНЫЙ ПРОМПТ
-# ─────────────────────────────────────────────────────────────────────────────
 SYSTEM_PROMPT = """
 Ты — бот @LegalHelpRU_bot, помощник по юридическим вопросам на основе российского законодательства.
 
@@ -33,17 +27,17 @@ SYSTEM_PROMPT = """
 
 СТРУКТУРА ОТВЕТА НА ЮРИДИЧЕСКИЙ ВОПРОС:
 
-⚠️ Дисклеймер (кратко)
+Дисклеймер (кратко)
 
-🎯 Краткий ответ: суть в 1-2 предложениях
+Краткий ответ: суть в 1-2 предложениях
 
-📋 Подробнее: развёрнутое объяснение простыми словами
+Подробнее: развёрнутое объяснение простыми словами
 
-⚖️ Правовая база: конкретные статьи и законы (если применимо)
+Правовая база: конкретные статьи и законы (если применимо)
 
-🔍 Практические шаги: что делать (если применимо)
+Практические шаги: что делать (если применимо)
 
-💡 Важно знать: ключевые нюансы и риски
+Важно знать: ключевые нюансы и риски
 
 ЗАКОНОДАТЕЛЬНАЯ БАЗА:
 Конституция РФ, ГК РФ, УК РФ, КоАП РФ, ТК РФ, СК РФ, НК РФ, ГПК РФ, УПК РФ, АПК РФ, ЖК РФ, ЗК РФ, ФЗ О защите прав потребителей, ФЗ О персональных данных и другие федеральные законы.
@@ -62,13 +56,13 @@ DOCUMENT_ANALYSIS_PROMPT = """
 Я бот, не юрист. Анализ носит информационный характер.
 
 Структура анализа:
-📋 Общая оценка: Соответствует / Частично / Не соответствует
-🔍 Чеклист обязательных элементов документа
-⚖️ Соответствие законодательству РФ
-🚨 Выявленные проблемы и риски
-🔧 Рекомендации по исправлению (со ссылками на статьи)
-💡 Практические советы
-🎯 Итоговое заключение
+Общая оценка: Соответствует / Частично / Не соответствует
+Чеклист обязательных элементов документа
+Соответствие законодательству РФ
+Выявленные проблемы и риски
+Рекомендации по исправлению (со ссылками на статьи)
+Практические советы
+Итоговое заключение
 
 Используй простой понятный язык, объясняй термины.
 """
@@ -76,16 +70,18 @@ DOCUMENT_ANALYSIS_PROMPT = """
 
 class GeminiAssistant:
     """
-    ИИ-помощник на базе Google Gemini (новая библиотека google-genai).
-    Совместимый интерфейс с neuralex.
+    ИИ-помощник на базе OpenRouter (совместимый интерфейс с neuralex).
     """
 
     _store: dict = {}
     _lock = threading.Lock()
 
-    def __init__(self, api_key: str, model: str = "gemini-2.0-flash",
+    def __init__(self, api_key: str, model: str = "meta-llama/llama-3.3-70b-instruct:free",
                  redis_url: str = None, vector_store=None):
-        self.client = genai.Client(api_key=api_key)
+        self.client = OpenAI(
+            api_key=api_key,
+            base_url="https://openrouter.ai/api/v1",
+        )
         self.model_name = model
         self.vector_store = vector_store
 
@@ -155,79 +151,65 @@ class GeminiAssistant:
     def conversational(self, query: str, session_id: str,
                        file_bytes: bytes = None, file_mime: str = None):
         """
-        query      — текст пользователя
-        session_id — ID пользователя/сессии
-        file_bytes — байты файла (PDF, DOCX, изображение) — опционально
-        file_mime  — MIME-тип файла
-
         Возвращает (answer: str, history: list)
         """
         start = time.time()
         history = self.get_session_history(session_id)
 
-        # Собираем историю в формат Gemini
-        gemini_history = []
+        # Формируем messages для OpenAI-совместимого API
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+
+        # Добавляем историю
         for msg in history:
-            role = "model" if msg.get("role") == "assistant" else "user"
-            gemini_history.append(
-                types.Content(role=role, parts=[types.Part(text=msg.get("content", ""))])
-            )
+            messages.append({
+                "role": msg.get("role", "user"),
+                "content": msg.get("content", "")
+            })
 
-        # Формируем текущее сообщение
-        parts = []
+        # Текущий запрос
+        user_content = query or DOCUMENT_ANALYSIS_PROMPT
 
-        # RAG-контекст (только если нет файла)
+        # RAG-контекст
         if not file_bytes:
             context = self._get_context(query)
             if context:
-                parts.append(types.Part(text=f"КОНТЕКСТ ИЗ БАЗЫ ЗАКОНОВ:\n{context}\n\n"))
+                user_content = f"КОНТЕКСТ ИЗ БАЗЫ ЗАКОНОВ:\n{context}\n\n{user_content}"
 
-        parts.append(types.Part(text=query or DOCUMENT_ANALYSIS_PROMPT))
-
-        # Добавляем файл если есть
-        if file_bytes and file_mime:
-            try:
-                with tempfile.NamedTemporaryFile(delete=False, suffix=self._ext(file_mime)) as tmp:
-                    tmp.write(file_bytes)
-                    tmp_path = tmp.name
-
-                uploaded = self.client.files.upload(
-                    file=tmp_path,
-                    config=types.UploadFileConfig(mime_type=file_mime)
-                )
-                parts = [
-                    types.Part(file_data=types.FileData(file_uri=uploaded.uri, mime_type=file_mime)),
-                    types.Part(text=query if query else DOCUMENT_ANALYSIS_PROMPT)
+        # Файл — конвертируем в base64 и добавляем как текст (OpenRouter поддерживает vision)
+        if file_bytes and file_mime and file_mime.startswith("image/"):
+            import base64
+            b64 = base64.b64encode(file_bytes).decode()
+            messages.append({
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": f"data:{file_mime};base64,{b64}"}},
+                    {"type": "text", "text": user_content}
                 ]
-                os.unlink(tmp_path)
-                logger.info(f"✅ Файл загружен в Gemini: {file_mime}")
-            except Exception as e:
-                logger.warning(f"Ошибка загрузки файла: {e}")
-                parts.append(types.Part(text="\n[Не удалось обработать прикреплённый файл]"))
-
-        # Добавляем текущее сообщение в историю
-        gemini_history.append(
-            types.Content(role="user", parts=parts)
-        )
+            })
+        else:
+            # Для PDF/DOCX — извлекаем текст и добавляем как текст
+            if file_bytes and file_mime:
+                extracted = self._extract_text(file_bytes, file_mime)
+                if extracted:
+                    user_content = f"{DOCUMENT_ANALYSIS_PROMPT}\n\nТЕКСТ ДОКУМЕНТА:\n{extracted[:8000]}"
+                else:
+                    user_content += "\n[Не удалось прочитать файл — отправьте текст вручную]"
+            messages.append({"role": "user", "content": user_content})
 
         try:
-            response = self.client.models.generate_content(
+            response = self.client.chat.completions.create(
                 model=self.model_name,
-                contents=gemini_history,
-                config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_PROMPT,
-                    max_output_tokens=2048,
-                    temperature=0.7,
-                )
+                messages=messages,
+                max_tokens=2048,
+                temperature=0.7,
             )
-            answer = response.text
+            answer = response.choices[0].message.content
 
             # Обновляем историю
             with self._lock:
                 self._store.setdefault(session_id, [])
                 self._store[session_id].append({"role": "user", "content": query or "Анализ документа"})
                 self._store[session_id].append({"role": "assistant", "content": answer})
-                # Максимум 20 сообщений (10 пар)
                 if len(self._store[session_id]) > 20:
                     self._store[session_id] = self._store[session_id][-20:]
 
@@ -239,8 +221,33 @@ class GeminiAssistant:
             return answer, self.get_session_history(session_id)
 
         except Exception as e:
-            logger.error(f"❌ Ошибка Gemini API для {session_id}: {e}")
+            logger.error(f"❌ Ошибка OpenRouter API для {session_id}: {e}")
             raise
+
+    def _extract_text(self, file_bytes: bytes, mime_type: str) -> str:
+        """Извлекает текст из PDF или DOCX"""
+        try:
+            if mime_type == "application/pdf":
+                import fitz  # PyMuPDF
+                import tempfile, os
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                    tmp.write(file_bytes)
+                    tmp_path = tmp.name
+                doc = fitz.open(tmp_path)
+                text = "\n".join(page.get_text() for page in doc)
+                doc.close()
+                os.unlink(tmp_path)
+                return text
+            elif "wordprocessingml" in mime_type or mime_type == "application/msword":
+                import docx
+                import tempfile, os, io
+                doc = docx.Document(io.BytesIO(file_bytes))
+                return "\n".join(p.text for p in doc.paragraphs)
+            elif mime_type == "text/plain":
+                return file_bytes.decode("utf-8", errors="ignore")
+        except Exception as e:
+            logger.warning(f"Ошибка извлечения текста из файла: {e}")
+        return ""
 
     def analyze_document(self, document_text: str, session_id: str,
                          file_bytes: bytes = None, file_mime: str = None) -> str:
@@ -254,16 +261,6 @@ class GeminiAssistant:
             answer, _ = self.conversational(prompt, session_id)
         return answer
 
-    @staticmethod
-    def _ext(mime: str) -> str:
-        return {
-            "application/pdf": ".pdf",
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
-            "text/plain": ".txt",
-            "image/jpeg": ".jpg",
-            "image/png": ".png",
-        }.get(mime, ".bin")
-
     def rate_last_answer(self, session_id: str, rating: int) -> bool:
         if self._redis:
             try:
@@ -272,3 +269,5 @@ class GeminiAssistant:
             except Exception:
                 pass
         return False
+ENDOFFILE
+echo "done"
