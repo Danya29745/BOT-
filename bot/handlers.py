@@ -67,7 +67,9 @@ try:
     logger.info('✅ GeminiAssistant инициализирован')
 
 except Exception as e:
+    import traceback
     logger.error(f'❌ Ошибка инициализации GeminiAssistant: {e}')
+    logger.error(traceback.format_exc())
     law_assistant = None
 
 # ─── Вспомогательные объекты ─────────────────────────────────────────────────
